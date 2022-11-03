@@ -1,141 +1,112 @@
 /* eslint-disable arrow-body-style */
 /* eslint-disable react/function-component-definition */
-import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router';
-import { Alert } from 'rsuite';
-import { database, auth } from '../../../misc/firebase';
-import { transformToArrWithId } from '../../../misc/helpers';
-import MessageItem from './MessageItem';
+import React, { memo } from 'react';
+import TimeAgo from 'timeago-react';
+import { Button } from 'rsuite';
+import ProfileAvatar from '../../ProfileAvatar';
+import ProfileInfoBtnModal from './ProfileInfoBtnModal';
+import PresenceDot from '../../PresenceDot';
+import { useCurrentRoom } from '../../../context/current-room.context';
+import { auth } from '../../../misc/firebase';
+import { useHover, useMediaQuery } from '../../../misc/custom-hooks';
+import IconBtnControl from './IconBtnControl';
+import ImgBtnModal from './ImgBtnModal';
 
-const Messages = () => {
-  const { chatId } = useParams();
-  const [messages, setMessages] = useState(null);
+const renderFileMessage = file => {
+  if (file.contentType.includes('image')) {
+    return (
+      <div className="height-220">
+        <ImgBtnModal src={file.url} fileName={file.name} />
+      </div>
+    );
+  }
 
-  const isChatEmpty = messages && messages.length === 0;
-  const canShowMessages = messages && messages.length > 0;
+  if (file.contentType.includes('audio')) {
+    return (
+      // eslint-disable-next-line jsx-a11y/media-has-caption
+      <audio controls>
+        <source src={file.url} type="audio/mp3" />
+        Your browser does not support the audio element.
+      </audio>
+    );
+  }
 
-  useEffect(() => {
-    const messagesRef = database.ref('/messages');
+  return <a href={file.url}>Download {file.name}</a>;
+};
 
-    messagesRef
-      .orderByChild('roomId')
-      .equalTo(chatId)
-      .on('value', snap => {
-        const data = transformToArrWithId(snap.val());
+const MessageItem = ({ message, handleAdmin, handleLike, handleDelete }) => {
+  const { author, createdAt, text, file, likes, likeCount } = message;
 
-        setMessages(data);
-      });
+  const [selfRef, isHovered] = useHover();
+  const isMobile = useMediaQuery('(max-width: 992px)');
 
-    return () => {
-      messagesRef.off('value');
-    };
-  }, [chatId]);
+  const isAdmin = useCurrentRoom(v => v.isAdmin);
+  const admins = useCurrentRoom(v => v.admins);
 
-  const handleAdmin = useCallback(
-    async uid => {
-      const adminsRef = database.ref(`/rooms/${chatId}/admins`);
+  const isMsgAuthorAdmin = admins.includes(author.uid);
+  const isAuthor = auth.currentUser.uid === author.uid;
+  const canGrantAdmin = isAdmin && !isAuthor;
 
-      let alertMsg;
-
-      await adminsRef.transaction(admins => {
-        if (admins) {
-          if (admins[uid]) {
-            admins[uid] = null;
-            alertMsg = 'Admin permission removed';
-          } else {
-            admins[uid] = true;
-            alertMsg = 'Admin permission granted';
-          }
-        }
-
-        return admins;
-      });
-
-      Alert.info(alertMsg, 4000);
-    },
-    [chatId]
-  );
-
-  const handleLike = useCallback(async msgId => {
-    const { uid } = auth.currentUser;
-    const messageRef = database.ref(`/messages/${msgId}`);
-
-    let alertMsg;
-
-    await messageRef.transaction(msg => {
-      if (msg) {
-        if (msg.likes && msg.likes[uid]) {
-          msg.likeCount -= 1;
-          msg.likes[uid] = null;
-          alertMsg = 'Like removed';
-        } else {
-          msg.likeCount += 1;
-
-          if (!msg.likes) {
-            msg.likes = {};
-          }
-
-          msg.likes[uid] = true;
-          alertMsg = 'Like added';
-        }
-      }
-
-      return msg;
-    });
-
-    Alert.info(alertMsg, 4000);
-  }, []);
-
-  const handleDelete = useCallback(
-    async msgId => {
-      // eslint-disable-next-line no-alert
-      if (!window.confirm('Delete this message?')) {
-        return;
-      }
-
-      const isLast = messages[messages.length - 1].id === msgId;
-
-      const updates = {};
-
-      updates[`/messages/${msgId}`] = null;
-
-      if (isLast && messages.length > 1) {
-        updates[`/rooms/${chatId}/lastMessage`] = {
-          ...messages[messages.length - 2],
-          msgId: messages[messages.length - 2].id,
-        };
-      }
-
-      if (isLast && messages.length === 1) {
-        updates[`/rooms/${chatId}/lastMessage`] = null;
-      }
-
-      try {
-        await database.ref().update(updates);
-
-        Alert.info('Message has been deleted');
-      } catch (err) {
-        Alert.error(err.message);
-      }
-    },
-    [chatId, messages]
-  );
+  const canShowIcons = isMobile || isHovered;
+  const isLiked = likes && Object.keys(likes).includes(auth.currentUser.uid);
 
   return (
-    <ul className="msg-list custom-scroll">
-      {isChatEmpty && <li>No messages yet</li>}
-      {canShowMessages &&
-        messages.map(msg => (
-          <MessageItem
-            key={msg.id}
-            message={msg}
-            handleAdmin={handleAdmin}
-            handleLike={handleLike}
-            handleDelete={handleDelete}
+    <li
+      className={`padded mb-1 cursor-pointer ${isHovered ? 'bg-black-02' : ''}`}
+      ref={selfRef}
+    >
+      <div className="d-flex align-items-center font-bolder mb-1">
+        <PresenceDot uid={author.uid} />
+
+        <ProfileAvatar
+          src={author.avatar}
+          name={author.name}
+          className="ml-1"
+          size="xs"
+        />
+
+        <ProfileInfoBtnModal
+          profile={author}
+          appearance="link"
+          className="p-0 ml-1 text-black"
+        >
+          {canGrantAdmin && (
+            <Button block onClick={() => handleAdmin(author.uid)} color="blue">
+              {isMsgAuthorAdmin
+                ? 'Remove admin permission'
+                : 'Give admin in this room'}
+            </Button>
+          )}
+        </ProfileInfoBtnModal>
+        <TimeAgo
+          datetime={createdAt}
+          className="font-normal text-black-45 ml-2"
+        />
+
+        <IconBtnControl
+          {...(isLiked ? { color: 'red' } : {})}
+          isVisible={canShowIcons}
+          iconName="heart"
+          tooltip="Like this message"
+          onClick={() => handleLike(message.id)}
+          badgeContent={likeCount}
+        />
+        {isAuthor && (
+          <IconBtnControl
+            isVisible={canShowIcons}
+            iconName="close"
+            tooltip="Delete this message"
+            onClick={() => handleDelete(message.id, file)}
           />
-        ))}
-    </ul>
+        )}
+      </div>
+
+      <div>
+        {text && <span className="word-breal-all">{text}</span>}
+        {file && renderFileMessage(file)}
+      </div>
+    </li>
   );
 };
 
-export default Messages;
+export default memo(MessageItem);
